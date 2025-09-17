@@ -4866,7 +4866,165 @@ function prepareCountryTimelineData(data, metric) {
 
         function exportResults(format = 'csv') {
             showToast('📊 Export', `${format.toUpperCase()} fayl yuklanmoqda...`, 'info');
-            console.log(`💾 Exporting results as ${format}...`);
+            
+            try {
+                // Ma'lumotlarni tayyorlash
+                const dataToExport = countryFilteredData.length > 0 ? countryFilteredData : currentData;
+                
+                if (!dataToExport || dataToExport.length === 0) {
+                    showToast('⚠️ Xatolik', 'Export qilish uchun ma\'lumot topilmadi', 'error');
+                    return;
+                }
+
+                if (format === 'csv') {
+                    exportToCSV(dataToExport);
+                } else if (format === 'excel') {
+                    exportToExcel(dataToExport);
+                }
+                
+                showToast('✅ Muvaffaqiyat!', `${format.toUpperCase()} fayl yuklandi`, 'success');
+                
+            } catch (error) {
+                console.error('Export error:', error);
+                showToast('❌ Xatolik', 'Faylni yuklab olishda xatolik yuz berdi', 'error');
+            }
+        }
+
+        function exportToCSV(data) {
+            // CSV sarlavhalarini aniqlash
+            const headers = getExportHeaders();
+            
+            // CSV ma'lumotlarini tayyorlash
+            const csvContent = [
+                headers.join(','), // Sarlavhalar
+                ...data.map(item => {
+                    return [
+                        `"${item.country || item.trading_partner || ''}"`,
+                        `"${item.name || item.product_name || ''}"`,
+                        `"${item.code || item.hs_code || item.hs_10_code || ''}"`,
+                        `"${item.year || ''}"`,
+                        getTradeDirectionText(item),
+                        `"${item.measure || ''}"`,
+                        ...(needsExportColumns() ? [
+                            item.export_volume || 0,
+                            item.export_price || 0
+                        ] : []),
+                        ...(needsImportColumns() ? [
+                            item.import_volume || 0,
+                            item.import_price || 0
+                        ] : []),
+                        `"${item.hs_group || ''}"`
+                    ].join(',');
+                })
+            ].join('\n');
+
+            // Fayl yaratish va yuklab olish
+            const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+            downloadFile(blob, `imrs_data_${getCurrentDateString()}.csv`);
+        }
+
+        function exportToExcel(data) {
+            // Excel uchun SheetJS kutubxonasidan foydalanish
+            if (typeof XLSX === 'undefined') {
+                showToast('⚠️ Xatolik', 'Excel export uchun kutubxona yuklanmagan', 'error');
+                return;
+            }
+
+            // Excel ma'lumotlarini tayyorlash
+            const headers = getExportHeaders();
+            const worksheetData = [
+                headers, // Sarlavhalar
+                ...data.map(item => [
+                    item.country || item.trading_partner || '',
+                    item.name || item.product_name || '',
+                    item.code || item.hs_code || item.hs_10_code || '',
+                    item.year || '',
+                    getTradeDirectionText(item),
+                    item.measure || '',
+                    ...(needsExportColumns() ? [
+                        item.export_volume || 0,
+                        item.export_price || 0
+                    ] : []),
+                    ...(needsImportColumns() ? [
+                        item.import_volume || 0,
+                        item.import_price || 0
+                    ] : []),
+                    item.hs_group || ''
+                ])
+            ];
+
+            // Excel workbook yaratish
+            const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "IMRS Data");
+
+            // Fayl yaratish va yuklab olish
+            XLSX.writeFile(wb, `imrs_data_${getCurrentDateString()}.xlsx`);
+        }
+
+        function getExportHeaders() {
+            let headers = [
+                'Davlat',
+                'Mahsulot',
+                'HS Kod',
+                'Yil',
+                'Yo\'nalish',
+                'O\'lchov'
+            ];
+
+            if (needsExportColumns()) {
+                headers.push('Eksport Hajmi', 'Eksport Narxi');
+            }
+
+            if (needsImportColumns()) {
+                headers.push('Import Hajmi', 'Import Narxi');
+            }
+
+            headers.push('HS Gruppa');
+            return headers;
+        }
+
+        function needsExportColumns() {
+            return selectedTradeDirections.length === 0 || selectedTradeDirections.includes('export');
+        }
+
+        function needsImportColumns() {
+            return selectedTradeDirections.length === 0 || selectedTradeDirections.includes('import');
+        }
+
+        function getTradeDirectionText(item) {
+            const directions = [];
+            
+            if ((selectedTradeDirections.length === 0 || selectedTradeDirections.includes('export')) && 
+                (item.export_volume > 0 || item.export_price > 0)) {
+                directions.push('Eksport');
+            }
+            
+            if ((selectedTradeDirections.length === 0 || selectedTradeDirections.includes('import')) && 
+                (item.import_volume > 0 || item.import_price > 0)) {
+                directions.push('Import');
+            }
+            
+            return `"${directions.join(' / ') || '-'}"`;
+        }
+
+        function downloadFile(blob, filename) {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }
+
+        function getCurrentDateString() {
+            const now = new Date();
+            return now.getFullYear() + '-' + 
+                   String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+                   String(now.getDate()).padStart(2, '0');
         }
 
         function formatPrice(value) {

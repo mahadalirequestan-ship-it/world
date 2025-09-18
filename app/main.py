@@ -80,8 +80,112 @@ async def upload_excel(file: UploadFile = File(...)):
 
 # === ANALYTICS ENDPOINTS ===
 
+# app/main.py - yangilangan qidiruv funksiyalari
+
+from sqlalchemy import or_
+
+@app.get("/api/search-products")
+async def search_products_by_hs_code(
+    hs_code: str,
+    db: Session = Depends(get_db)
+):
+    """Barcha HS kod turlari bo'yicha aniq qidirish"""
+    try:
+        search_term = hs_code.strip()
+        
+        # Qidiruv uzunligiga qarab mos HS kod turini aniqlash
+        search_conditions = []
+        
+        # 2 xonali kod
+        if len(search_term) == 2 and search_term.isdigit():
+            search_conditions.append(TradeRecord.hs_2_code == search_term)
+        
+        # 4 xonali kod
+        elif len(search_term) == 4 and search_term.isdigit():
+            search_conditions.append(TradeRecord.hs_4_code == search_term)
+        
+        # 6 xonali kod
+        elif len(search_term) == 6 and search_term.isdigit():
+            search_conditions.append(TradeRecord.hs_6_code == search_term)
+        
+        # 10 xonali kod
+        elif len(search_term) == 10 and search_term.isdigit():
+            search_conditions.append(TradeRecord.hs_10_code == search_term)
+        
+        # Agar aniq uzunlik mos kelmasa, barcha HS kod turlarida qidirish
+        else:
+            search_conditions = [
+                TradeRecord.hs_2_code == search_term,
+                TradeRecord.hs_4_code == search_term,
+                TradeRecord.hs_6_code == search_term,
+                TradeRecord.hs_10_code == search_term
+            ]
+        
+        # Query yaratish
+        if search_conditions:
+            products = db.query(
+                TradeRecord.product_name,
+                TradeRecord.hs_2_code,
+                TradeRecord.hs_4_code,
+                TradeRecord.hs_6_code,
+                TradeRecord.hs_10_code,
+                TradeRecord.hs_group
+            ).filter(
+                or_(*search_conditions)
+            ).distinct().all()
+        else:
+            products = []
+        
+        results = []
+        for p in products:
+            if p[0] and p[0].strip():
+                results.append({
+                    "name": p[0],
+                    "product_name": p[0],
+                    "hs_2_code": p[1],
+                    "hs_4_code": p[2],
+                    "hs_6_code": p[3],
+                    "hs_10_code": p[4],
+                    "hs_group": p[5]
+                })
+        
+        return {
+            "success": True,
+            "results": results,
+            "search_term": search_term,
+            "count": len(results),
+            "searched_in": get_searched_fields(search_term)
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "results": [],
+            "count": 0
+        }
+
+def get_searched_fields(search_term):
+    """Qaysi HS kod turlarida qidirilganini qaytarish"""
+    length = len(search_term)
+    if length == 2:
+        return ["hs_2_code"]
+    elif length == 4:
+        return ["hs_4_code"]
+    elif length == 6:
+        return ["hs_6_code"]
+    elif length == 10:
+        return ["hs_10_code"]
+    else:
+        return ["hs_2_code", "hs_4_code", "hs_6_code", "hs_10_code"]
+
 @app.get("/api/filter-options")
-async def get_filter_options(db: Session = Depends(get_db)):
+async def get_filter_options(
+    search_term: Optional[str] = None,
+    limit: int = 1000,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
     try:
         # Countries
         countries_raw = db.query(distinct(TradeRecord.trading_partner))\
@@ -91,19 +195,35 @@ async def get_filter_options(db: Session = Depends(get_db)):
         
         countries = [c[0] for c in countries_raw if c[0] and c[0].strip()]
 
-        # Products - JAMI sonini hisoblash
-        total_products_count = db.query(func.count(distinct(TradeRecord.product_name)))\
-                             .filter(TradeRecord.product_name.isnot(None)).scalar()
-
-        # Faqat birinchi 1000 ta mahsulotni olish (tezlik uchun)
-        products_raw = db.query(
+        # Products query - barcha HS kodlarni olish
+        products_query = db.query(
             TradeRecord.product_name,
+            TradeRecord.hs_2_code,
+            TradeRecord.hs_4_code,
+            TradeRecord.hs_6_code,
             TradeRecord.hs_10_code,
-            TradeRecord.hs_6_code
-        ).filter(TradeRecord.product_name.isnot(None))\
-         .distinct()\
-         .limit(1000)\
-         .all()
+            TradeRecord.hs_group
+        ).filter(TradeRecord.product_name.isnot(None))
+
+        # Agar search_term berilgan bo'lsa, barcha HS kod turlarida qidirish
+        if search_term:
+            search_term = search_term.strip()
+            search_conditions = [
+                TradeRecord.hs_2_code == search_term,
+                TradeRecord.hs_4_code == search_term,
+                TradeRecord.hs_6_code == search_term,
+                TradeRecord.hs_10_code == search_term
+            ]
+            products_query = products_query.filter(or_(*search_conditions))
+        
+        # Jami sonini hisoblash
+        total_products_count = products_query.distinct().count()
+        
+        # Ma'lumotlarni olish
+        products_raw = products_query.distinct()\
+                                  .offset(offset)\
+                                  .limit(limit)\
+                                  .all()
         
         products = []
         for p in products_raw:
@@ -111,8 +231,11 @@ async def get_filter_options(db: Session = Depends(get_db)):
                 products.append({
                     "name": p[0],
                     "product_name": p[0],
-                    "hs_10_code": p[1],
-                    "hs_6_code": p[2]
+                    "hs_2_code": p[1],
+                    "hs_4_code": p[2],
+                    "hs_6_code": p[3],
+                    "hs_10_code": p[4],
+                    "hs_group": p[5]
                 })
 
         # Years
@@ -129,15 +252,130 @@ async def get_filter_options(db: Session = Depends(get_db)):
             "products": products,
             "years": years,
             "pagination": {
-                "total": total_products_count,  # Jami mahsulotlar soni
-                "loaded": len(products),        # Yuklangan mahsulotlar soni
-                "has_more": len(products) < total_products_count
-            }
+                "total": total_products_count,
+                "loaded": len(products),
+                "has_more": len(products) < total_products_count,
+                "offset": offset,
+                "limit": limit
+            },
+            "search_term": search_term
         }
         
     except Exception as e:
         return {"success": False, "error": str(e)}
-    
+
+@app.get("/api/all-hs-codes")
+async def get_all_hs_codes(db: Session = Depends(get_db)):
+    """Barcha HS kod turlarini olish"""
+    try:
+        # Barcha HS kod turlarini alohida olish
+        hs_2_codes = db.query(distinct(TradeRecord.hs_2_code))\
+                      .filter(TradeRecord.hs_2_code.isnot(None))\
+                      .order_by(TradeRecord.hs_2_code)\
+                      .all()
+        
+        hs_4_codes = db.query(distinct(TradeRecord.hs_4_code))\
+                      .filter(TradeRecord.hs_4_code.isnot(None))\
+                      .order_by(TradeRecord.hs_4_code)\
+                      .all()
+        
+        hs_6_codes = db.query(distinct(TradeRecord.hs_6_code))\
+                      .filter(TradeRecord.hs_6_code.isnot(None))\
+                      .order_by(TradeRecord.hs_6_code)\
+                      .all()
+        
+        hs_10_codes = db.query(distinct(TradeRecord.hs_10_code))\
+                       .filter(TradeRecord.hs_10_code.isnot(None))\
+                       .order_by(TradeRecord.hs_10_code)\
+                       .all()
+        
+        # Ma'lumotlarni formatlash
+        result = {
+            "hs_2_codes": [code[0] for code in hs_2_codes if code[0] and str(code[0]).strip()],
+            "hs_4_codes": [code[0] for code in hs_4_codes if code[0] and str(code[0]).strip()],
+            "hs_6_codes": [code[0] for code in hs_6_codes if code[0] and str(code[0]).strip()],
+            "hs_10_codes": [code[0] for code in hs_10_codes if code[0] and str(code[0]).strip()]
+        }
+        
+        # Barcha kodlarni birlashtirib, unique qilish
+        all_codes = set()
+        for code_list in result.values():
+            all_codes.update(code_list)
+        
+        return {
+            "success": True,
+            "by_type": result,
+            "all_codes": sorted(list(all_codes)),
+            "statistics": {
+                "hs_2_count": len(result["hs_2_codes"]),
+                "hs_4_count": len(result["hs_4_codes"]),
+                "hs_6_count": len(result["hs_6_codes"]),
+                "hs_10_count": len(result["hs_10_codes"]),
+                "total_unique": len(all_codes)
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "by_type": {},
+            "all_codes": [],
+            "statistics": {}
+        }
+
+@app.get("/api/debug-hs-codes")
+async def debug_hs_codes(
+    sample_codes: List[str] = ["01", "0102", "010221", "0102211000", "9912000000"],
+    db: Session = Depends(get_db)
+):
+    """Barcha HS kod turlarini debug qilish"""
+    try:
+        debug_info = {}
+        
+        for code in sample_codes:
+            code = code.strip()
+            
+            # Har bir HS kod turida qidirish
+            hs_2_matches = db.query(TradeRecord).filter(TradeRecord.hs_2_code == code).count()
+            hs_4_matches = db.query(TradeRecord).filter(TradeRecord.hs_4_code == code).count()
+            hs_6_matches = db.query(TradeRecord).filter(TradeRecord.hs_6_code == code).count()
+            hs_10_matches = db.query(TradeRecord).filter(TradeRecord.hs_10_code == code).count()
+            
+            debug_info[code] = {
+                "hs_2_matches": hs_2_matches,
+                "hs_4_matches": hs_4_matches,
+                "hs_6_matches": hs_6_matches,
+                "hs_10_matches": hs_10_matches,
+                "total_matches": hs_2_matches + hs_4_matches + hs_6_matches + hs_10_matches,
+                "expected_field": get_expected_hs_field(code)
+            }
+        
+        return {
+            "success": True,
+            "sample_codes_debug": debug_info
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+def get_expected_hs_field(code):
+    """Kod uzunligiga qarab kutilgan HS field ni aniqlash"""
+    length = len(code)
+    if length == 2:
+        return "hs_2_code"
+    elif length == 4:
+        return "hs_4_code"
+    elif length == 6:
+        return "hs_6_code"
+    elif length == 10:
+        return "hs_10_code"
+    else:
+        return "unknown"
+           
 @app.get("/api/trade-data")
 async def get_trade_data(
     country: Optional[str] = None,
@@ -245,7 +483,7 @@ async def get_filtered_data(
             "error": str(e),
             "data": []
         }
-    
+
 @app.get("/api/export-data")
 async def export_data(
     country: Optional[str] = None,
